@@ -10,7 +10,7 @@ type Error struct {
 	Location
 	Message string
 	Snippet string
-	Prev error
+	Prev    error
 }
 
 func (e *Error) Error() string {
@@ -21,8 +21,8 @@ func (e *Error) Bind(source *Source) *Error {
 	if snippet, found := source.Snippet(e.Location.Line); found {
 		snippet := strings.Replace(snippet, "\t", " ", -1)
 		srcLine := "\n | " + snippet
-		var bytes = []byte(snippet)
-		var indLine = "\n | "
+		bytes := []byte(snippet)
+		indLine := "\n | "
 		for i := 0; i < e.Location.Column && len(bytes) > 0; i++ {
 			_, sz := utf8.DecodeRune(bytes)
 			bytes = bytes[sz:]
@@ -45,7 +45,6 @@ func (e *Error) Bind(source *Source) *Error {
 	return e
 }
 
-
 func (e *Error) Unwrap() error {
 	return e.Prev
 }
@@ -53,7 +52,6 @@ func (e *Error) Unwrap() error {
 func (e *Error) Wrap(err error) {
 	e.Prev = err
 }
-
 
 func (e *Error) format() string {
 	if e.Location.Empty() {
