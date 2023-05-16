@@ -13,8 +13,10 @@ import (
 	"github.com/antonmedv/expr/vm/runtime"
 )
 
-var MemoryBudget int = 1e6
-var errorType = reflect.TypeOf((*error)(nil)).Elem()
+var (
+	MemoryBudget int = 1e6
+	errorType        = reflect.TypeOf((*error)(nil)).Elem()
+)
 
 type Function = func(params ...interface{}) (interface{}, error)
 
