@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/antonmedv/expr/file"
-	. "github.com/antonmedv/expr/parser/lexer"
+	"github.com/expr-lang/expr/file"
+	. "github.com/expr-lang/expr/parser/lexer"
 )
 
 func TestLex(t *testing.T) {
@@ -18,7 +18,7 @@ func TestLex(t *testing.T) {
 		tokens []Token
 	}{
 		{
-			".5 0.025 1 02 1e3 0xFF 1.2e-4 1_000_000 _42 -.5",
+			".5 0.025 1 02 1e3 0xFF 0b0101 0o600 1.2e-4 1_000_000 _42 -.5",
 			[]Token{
 				{Kind: Number, Value: ".5"},
 				{Kind: Number, Value: "0.025"},
@@ -26,6 +26,8 @@ func TestLex(t *testing.T) {
 				{Kind: Number, Value: "02"},
 				{Kind: Number, Value: "1e3"},
 				{Kind: Number, Value: "0xFF"},
+				{Kind: Number, Value: "0b0101"},
+				{Kind: Number, Value: "0o600"},
 				{Kind: Number, Value: "1.2e-4"},
 				{Kind: Number, Value: "1_000_000"},
 				{Kind: Identifier, Value: "_42"},
@@ -43,6 +45,19 @@ func TestLex(t *testing.T) {
 				{Kind: String, Value: "\"'"},
 				{Kind: String, Value: "'\""},
 				{Kind: String, Value: "Ã¿☺Ψ"},
+				{Kind: String, Value: "❤️"},
+				{Kind: EOF},
+			},
+		},
+		{
+			"`backtick` `hello\u263Aworld` `hello\n\tworld` `hello\"world'`  `\xC3\xBF\u263A\U000003A8` `❤️`",
+			[]Token{
+				{Kind: String, Value: `backtick`},
+				{Kind: String, Value: `hello☺world`},
+				{Kind: String, Value: `hello
+	world`},
+				{Kind: String, Value: `hello"world'`},
+				{Kind: String, Value: `ÿ☺Ψ`},
 				{Kind: String, Value: "❤️"},
 				{Kind: EOF},
 			},
@@ -207,6 +222,14 @@ func TestLex(t *testing.T) {
 				{Kind: Operator, Value: "#"},
 				{Kind: Identifier, Value: "1"},
 				{Kind: Operator, Value: "#"},
+				{Kind: EOF},
+			},
+		},
+		{
+			`: ::`,
+			[]Token{
+				{Kind: Operator, Value: ":"},
+				{Kind: Operator, Value: "::"},
 				{Kind: EOF},
 			},
 		},

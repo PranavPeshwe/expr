@@ -4,8 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/antonmedv/expr"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/expr-lang/expr"
 )
 
 func TestDeref_binary(t *testing.T) {
@@ -136,4 +138,118 @@ func TestDeref_multiple_pointers(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 44, output)
 	})
+}
+
+func TestDeref_pointer_of_interface(t *testing.T) {
+	v := 42
+	a := &v
+	b := any(a)
+	c := any(&b)
+	t.Run("returned as is", func(t *testing.T) {
+		output, err := expr.Eval(`c`, map[string]any{
+			"c": c,
+		})
+		require.NoError(t, err)
+		require.Equal(t, c, output)
+		require.IsType(t, (*interface{})(nil), output)
+	})
+	t.Run("+ works", func(t *testing.T) {
+		output, err := expr.Eval(`c+2`, map[string]any{
+			"c": c,
+		})
+		require.NoError(t, err)
+		require.Equal(t, 44, output)
+	})
+}
+
+func TestDeref_nil(t *testing.T) {
+	var b *int = nil
+	c := &b
+	t.Run("returned as is", func(t *testing.T) {
+		output, err := expr.Eval(`c`, map[string]any{
+			"c": c,
+		})
+		require.NoError(t, err)
+		require.Equal(t, c, output)
+		require.IsType(t, (**int)(nil), output)
+	})
+	t.Run("== nil works", func(t *testing.T) {
+		output, err := expr.Eval(`c == nil`, map[string]any{
+			"c": c,
+		})
+		require.NoError(t, err)
+		require.Equal(t, true, output)
+	})
+}
+
+func TestDeref_nil_in_pointer_of_interface(t *testing.T) {
+	var a *int32 = nil
+	b := any(a)
+	c := any(&b)
+	t.Run("returned as is", func(t *testing.T) {
+		output, err := expr.Eval(`c`, map[string]any{
+			"c": c,
+		})
+		require.NoError(t, err)
+		require.Equal(t, c, output)
+		require.IsType(t, (*interface{})(nil), output)
+	})
+	t.Run("== nil works", func(t *testing.T) {
+		output, err := expr.Eval(`c == nil`, map[string]any{
+			"c": c,
+		})
+		require.NoError(t, err)
+		require.Equal(t, true, output)
+	})
+}
+
+func TestDeref_сommutative(t *testing.T) {
+	a := "ok"
+	b := "ok"
+
+	type Env struct {
+		A string
+		B *string
+	}
+
+	env := Env{
+		A: a,
+		B: &b,
+	}
+
+	tests := []struct {
+		code string
+		want bool
+	}{
+		{`A == B`, true},
+		{`B == A`, true},
+		{`A != B`, false},
+		{`B != A`, false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.code, func(t *testing.T) {
+			program, err := expr.Compile(test.code, expr.Env(env))
+			require.NoError(t, err)
+
+			out, err := expr.Run(program, env)
+			require.NoError(t, err)
+			require.Equal(t, test.want, out)
+		})
+	}
+}
+
+func TestDeref_fetch_from_interface_mix_pointer(t *testing.T) {
+	type FooBar struct {
+		Value string
+	}
+	foobar := &FooBar{"waldo"}
+	var foobarAny any = foobar
+	var foobarPtrAny any = &foobarAny
+
+	res, err := expr.Eval("foo.Value", map[string]any{
+		"foo": foobarPtrAny,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, "waldo", res)
 }

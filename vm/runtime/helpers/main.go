@@ -93,10 +93,6 @@ func isFloat(t string) bool {
 	return strings.HasPrefix(t, "float")
 }
 
-func isInt(t string) bool {
-	return strings.HasPrefix(t, "int")
-}
-
 func isDuration(t string) bool {
 	return t == "time.Duration"
 }
@@ -127,6 +123,11 @@ func Equal(a, b interface{}) bool {
 	case time.Duration:
 		switch y := b.(type) {
 		case time.Duration:
+			return x == y
+		}
+	case bool:
+		switch y := b.(type) {
+		case bool:
 			return x == y
 		}
 	}

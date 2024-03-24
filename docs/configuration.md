@@ -73,7 +73,7 @@ during the compile step.
 program, err := expr.Compile(`fib(42)`, expr.ConstExpr("fib"))
 ```
 
-[ConstExpr Example](https://pkg.go.dev/github.com/antonmedv/expr?tab=doc#ConstExpr)
+[ConstExpr Example](https://pkg.go.dev/github.com/expr-lang/expr?tab=doc#ConstExpr)
 
 ## Env()
 
@@ -145,12 +145,12 @@ Here is another example with a few function signatures:
 
 ## Operator()
 
-This options defines an [operator overloading](Operator-Overloading.md).
+This options defines an [operator overloading](operator-overloading).
 
 ## Optimize()
 
-This option enables [optimizations](Internals.md). By default, Expr will optimize the expression.
+This option enables [optimizations](internals.md). By default, Expr will optimize the expression.
 
 ## Patch()
 
-This option allows you to [patch the expression](Visitor-and-Patch.md) before compilation.
+This option allows you to [patch the expression](visitor-and-patch) before compilation.

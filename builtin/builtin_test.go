@@ -7,22 +7,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/antonmedv/expr"
-	"github.com/antonmedv/expr/builtin"
-	"github.com/antonmedv/expr/checker"
-	"github.com/antonmedv/expr/conf"
-	"github.com/antonmedv/expr/parser"
-	"github.com/antonmedv/expr/test/mock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/builtin"
+	"github.com/expr-lang/expr/checker"
+	"github.com/expr-lang/expr/conf"
+	"github.com/expr-lang/expr/parser"
+	"github.com/expr-lang/expr/test/mock"
 )
 
 func TestBuiltin(t *testing.T) {
+	ArrayWithNil := []any{42}
 	env := map[string]any{
-		"ArrayOfString": []string{"foo", "bar", "baz"},
-		"ArrayOfInt":    []int{1, 2, 3},
-		"ArrayOfAny":    []any{1, "2", true},
-		"ArrayOfFoo":    []mock.Foo{{Value: "a"}, {Value: "b"}, {Value: "c"}},
+		"ArrayOfString":   []string{"foo", "bar", "baz"},
+		"ArrayOfInt":      []int{1, 2, 3},
+		"ArrayOfAny":      []any{1, "2", true},
+		"ArrayOfFoo":      []mock.Foo{{Value: "a"}, {Value: "b"}, {Value: "c"}},
+		"PtrArrayWithNil": &ArrayWithNil,
 	}
 
 	var tests = []struct {
@@ -35,6 +38,13 @@ func TestBuiltin(t *testing.T) {
 		{`abs(-5)`, 5},
 		{`abs(.5)`, .5},
 		{`abs(-.5)`, .5},
+		{`ceil(5.5)`, 6.0},
+		{`ceil(5)`, 5.0},
+		{`floor(5.5)`, 5.0},
+		{`floor(5)`, 5.0},
+		{`round(5.5)`, 6.0},
+		{`round(5)`, 5.0},
+		{`round(5.49)`, 5.0},
 		{`int(5.5)`, 5},
 		{`int(5)`, 5},
 		{`int("5")`, 5},
@@ -67,21 +77,37 @@ func TestBuiltin(t *testing.T) {
 		{`hasSuffix("foo,bar,baz", "baz")`, true},
 		{`max(1, 2, 3)`, 3},
 		{`max(1.5, 2.5, 3.5)`, 3.5},
+		{`max([1, 2, 3])`, 3},
+		{`max([1.5, 2.5, 3.5])`, 3.5},
+		{`max([1, 2, 4, 10], 20, [29, 23, -19])`, 29},
+		{`min([1, 2, 4, 10], 20, [29, 23, -19])`, -19},
 		{`min(1, 2, 3)`, 1},
 		{`min(1.5, 2.5, 3.5)`, 1.5},
+		{`min([1, 2, 3])`, 1},
+		{`min([1.5, 2.5, 3.5])`, 1.5},
+		{`min(-1, [1.5, 2.5, 3.5])`, -1},
 		{`sum(1..9)`, 45},
 		{`sum([.5, 1.5, 2.5])`, 4.5},
 		{`sum([])`, 0},
 		{`sum([1, 2, 3.0, 4])`, 10.0},
+		{`sum(10, [1, 2, 3], 1..9)`, 61},
+		{`sum(-10, [1, 2, 3, 4])`, 0},
+		{`sum(-10.9, [1, 2, 3, 4, 9])`, 8.1},
 		{`mean(1..9)`, 5.0},
 		{`mean([.5, 1.5, 2.5])`, 1.5},
 		{`mean([])`, 0.0},
 		{`mean([1, 2, 3.0, 4])`, 2.5},
+		{`mean(10, [1, 2, 3], 1..9)`, 4.6923076923076925},
+		{`mean(-10, [1, 2, 3, 4])`, 0.0},
+		{`mean(10.9, 1..9)`, 5.59},
 		{`median(1..9)`, 5.0},
 		{`median([.5, 1.5, 2.5])`, 1.5},
 		{`median([])`, 0.0},
 		{`median([1, 2, 3])`, 2.0},
 		{`median([1, 2, 3, 4])`, 2.5},
+		{`median(10, [1, 2, 3], 1..9)`, 4.0},
+		{`median(-10, [1, 2, 3, 4])`, 2.0},
+		{`median(1..5, 4.9)`, 3.5},
 		{`toJSON({foo: 1, bar: 2})`, "{\n  \"bar\": 2,\n  \"foo\": 1\n}"},
 		{`fromJSON("[1, 2, 3]")`, []any{1.0, 2.0, 3.0}},
 		{`toBase64("hello")`, "aGVsbG8="},
@@ -122,6 +148,8 @@ func TestBuiltin(t *testing.T) {
 		{`reduce(1..9, # + #acc)`, 45},
 		{`reduce([.5, 1.5, 2.5], # + #acc, 0)`, 4.5},
 		{`reduce([], 5, 0)`, 0},
+		{`concat(ArrayOfString, ArrayOfInt)`, []any{"foo", "bar", "baz", 1, 2, 3}},
+		{`concat(PtrArrayWithNil, [nil])`, []any{42, nil}},
 	}
 
 	for _, test := range tests {
@@ -185,12 +213,24 @@ func TestBuiltin_errors(t *testing.T) {
 		{`trim()`, `not enough arguments to call trim`},
 		{`max()`, `not enough arguments to call max`},
 		{`max(1, "2")`, `invalid argument for max (type string)`},
+		{`max([1, "2"])`, `invalid argument for max (type string)`},
 		{`min()`, `not enough arguments to call min`},
 		{`min(1, "2")`, `invalid argument for min (type string)`},
+		{`min([1, "2"])`, `invalid argument for min (type string)`},
+		{`median(1..9, "t")`, "invalid argument for median (type string)"},
+		{`mean("s", 1..9)`, "invalid argument for mean (type string)"},
+		{`sum("s", "h")`, "invalid argument for sum (type string)"},
 		{`duration("error")`, `invalid duration`},
 		{`date("error")`, `invalid date`},
 		{`get()`, `invalid number of arguments (expected 2, got 0)`},
 		{`get(1, 2)`, `type int does not support indexing`},
+		{`bitnot("1")`, "cannot use string as argument (type int) to call bitnot  (1:8)"},
+		{`bitand("1", 1)`, "cannot use string as argument (type int) to call bitand  (1:8)"},
+		{`"10" | bitor(1)`, "cannot use string as argument (type int) to call bitor  (1:1)"},
+		{`bitshr("5", 1)`, "cannot use string as argument (type int) to call bitshr  (1:8)"},
+		{`bitshr(-5, -2)`, "invalid operation: negative shift count -2 (type int) (1:1)"},
+		{`bitshl(1, -1)`, "invalid operation: negative shift count -1 (type int) (1:1)"},
+		{`bitushr(-5, -2)`, "invalid operation: negative shift count -2 (type int) (1:1)"},
 	}
 	for _, test := range errorTests {
 		t.Run(test.input, func(t *testing.T) {
@@ -245,42 +285,111 @@ func TestBuiltin_memory_limits(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.input, func(t *testing.T) {
-			_, err := expr.Eval(test.input, nil)
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "memory budget exceeded")
+			timeout := make(chan bool, 1)
+			go func() {
+				time.Sleep(time.Second)
+				timeout <- true
+			}()
+
+			done := make(chan bool, 1)
+			go func() {
+				_, err := expr.Eval(test.input, nil)
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "memory budget exceeded")
+				done <- true
+			}()
+
+			select {
+			case <-done:
+				// Success.
+			case <-timeout:
+				t.Fatal("timeout")
+			}
 		})
 	}
 }
 
-func TestBuiltin_disallow_builtins_override(t *testing.T) {
-	t.Run("via env", func(t *testing.T) {
-		env := map[string]any{
-			"len": func() int { return 42 },
-			"repeat": func(a string) string {
-				return a
-			},
+func TestBuiltin_allow_builtins_override(t *testing.T) {
+	t.Run("via env var", func(t *testing.T) {
+		for _, name := range builtin.Names {
+			t.Run(name, func(t *testing.T) {
+				env := map[string]any{
+					name: "hello world",
+				}
+				program, err := expr.Compile(name, expr.Env(env))
+				require.NoError(t, err)
+
+				out, err := expr.Run(program, env)
+				require.NoError(t, err)
+				assert.Equal(t, "hello world", out)
+			})
 		}
-		assert.Panics(t, func() {
-			_, _ = expr.Compile(`string(len("foo")) + repeat("0", 2)`, expr.Env(env))
-		})
+	})
+	t.Run("via env func", func(t *testing.T) {
+		for _, name := range builtin.Names {
+			t.Run(name, func(t *testing.T) {
+				env := map[string]any{
+					name: func() int { return 1 },
+				}
+				program, err := expr.Compile(fmt.Sprintf("%s()", name), expr.Env(env))
+				require.NoError(t, err)
+
+				out, err := expr.Run(program, env)
+				require.NoError(t, err)
+				assert.Equal(t, 1, out)
+			})
+		}
 	})
 	t.Run("via expr.Function", func(t *testing.T) {
-		length := expr.Function("len",
-			func(params ...any) (any, error) {
-				return 42, nil
-			},
-			new(func() int),
-		)
-		repeat := expr.Function("repeat",
-			func(params ...any) (any, error) {
-				return params[0], nil
-			},
-			new(func(string) string),
-		)
-		assert.Panics(t, func() {
-			_, _ = expr.Compile(`string(len("foo")) + repeat("0", 2)`, length, repeat)
-		})
+		for _, name := range builtin.Names {
+			t.Run(name, func(t *testing.T) {
+				fn := expr.Function(name,
+					func(params ...any) (any, error) {
+						return 42, nil
+					},
+					new(func() int),
+				)
+				program, err := expr.Compile(fmt.Sprintf("%s()", name), fn)
+				require.NoError(t, err)
+
+				out, err := expr.Run(program, nil)
+				require.NoError(t, err)
+				assert.Equal(t, 42, out)
+			})
+		}
 	})
+	t.Run("via expr.Function as pipe", func(t *testing.T) {
+		for _, name := range builtin.Names {
+			t.Run(name, func(t *testing.T) {
+				fn := expr.Function(name,
+					func(params ...any) (any, error) {
+						return 42, nil
+					},
+					new(func(s string) int),
+				)
+				program, err := expr.Compile(fmt.Sprintf("'str' | %s()", name), fn)
+				require.NoError(t, err)
+
+				out, err := expr.Run(program, nil)
+				require.NoError(t, err)
+				assert.Equal(t, 42, out)
+			})
+		}
+	})
+}
+
+func TestBuiltin_override_and_still_accessible(t *testing.T) {
+	env := map[string]any{
+		"len": func() int { return 42 },
+		"all": []int{1, 2, 3},
+	}
+
+	program, err := expr.Compile(`::all(all, #>0) && len() == 42 && ::len(all) == 3`, expr.Env(env))
+	require.NoError(t, err)
+
+	out, err := expr.Run(program, env)
+	require.NoError(t, err)
+	assert.Equal(t, true, out)
 }
 
 func TestBuiltin_DisableBuiltin(t *testing.T) {
@@ -380,7 +489,7 @@ func TestBuiltin_type(t *testing.T) {
 		{func() {}, "func"},
 		{time.Now(), "time.Time"},
 		{time.Second, "time.Duration"},
-		{Foo{}, "github.com/antonmedv/expr/builtin_test.Foo"},
+		{Foo{}, "github.com/expr-lang/expr/builtin_test.Foo"},
 		{struct{}{}, "struct"},
 		{a, "int"},
 	}
@@ -399,21 +508,24 @@ func TestBuiltin_type(t *testing.T) {
 	}
 }
 
-func TestBuiltin_sort(t *testing.T) {
+func TestBuiltin_reverse(t *testing.T) {
 	env := map[string]any{
 		"ArrayOfString": []string{"foo", "bar", "baz"},
-		"ArrayOfInt":    []int{3, 2, 1},
+		"ArrayOfInt":    []int{2, 1, 3},
+		"ArrayOfFloat":  []float64{3.0, 2.0, 1.0},
 		"ArrayOfFoo":    []mock.Foo{{Value: "c"}, {Value: "a"}, {Value: "b"}},
 	}
 	tests := []struct {
 		input string
 		want  any
 	}{
-		{`sort([])`, []any{}},
-		{`sort(ArrayOfInt)`, []any{1, 2, 3}},
-		{`sort(ArrayOfInt, 'desc')`, []any{3, 2, 1}},
-		{`sortBy(ArrayOfFoo, 'Value')`, []any{mock.Foo{Value: "a"}, mock.Foo{Value: "b"}, mock.Foo{Value: "c"}}},
-		{`sortBy([{id: "a"}, {id: "b"}], "id", "desc")`, []any{map[string]any{"id": "b"}, map[string]any{"id": "a"}}},
+		{`reverse([])`, []any{}},
+		{`reverse(ArrayOfInt)`, []any{3, 1, 2}},
+		{`reverse(ArrayOfFloat)`, []any{1.0, 2.0, 3.0}},
+		{`reverse(ArrayOfFoo)`, []any{mock.Foo{Value: "b"}, mock.Foo{Value: "a"}, mock.Foo{Value: "c"}}},
+		{`reverse([[1,2], [2,2]])`, []any{[]any{2, 2}, []any{1, 2}}},
+		{`reverse(reverse([[1,2], [2,2]]))`, []any{[]any{1, 2}, []any{2, 2}}},
+		{`reverse([{"test": true}, {id:4}, {name: "value"}])`, []any{map[string]any{"name": "value"}, map[string]any{"id": 4}, map[string]any{"test": true}}},
 	}
 
 	for _, test := range tests {
@@ -426,4 +538,91 @@ func TestBuiltin_sort(t *testing.T) {
 			assert.Equal(t, test.want, out)
 		})
 	}
+}
+
+func TestBuiltin_sort(t *testing.T) {
+	env := map[string]any{
+		"ArrayOfString": []string{"foo", "bar", "baz"},
+		"ArrayOfInt":    []int{3, 2, 1},
+		"ArrayOfFloat":  []float64{3.0, 2.0, 1.0},
+		"ArrayOfFoo":    []mock.Foo{{Value: "c"}, {Value: "a"}, {Value: "b"}},
+	}
+	tests := []struct {
+		input string
+		want  any
+	}{
+		{`sort([])`, []any{}},
+		{`sort(ArrayOfInt)`, []any{1, 2, 3}},
+		{`sort(ArrayOfFloat)`, []any{1.0, 2.0, 3.0}},
+		{`sort(ArrayOfInt, 'desc')`, []any{3, 2, 1}},
+		{`sortBy(ArrayOfFoo, .Value)`, []any{mock.Foo{Value: "a"}, mock.Foo{Value: "b"}, mock.Foo{Value: "c"}}},
+		{`sortBy([{id: "a"}, {id: "b"}], .id, "desc")`, []any{map[string]any{"id": "b"}, map[string]any{"id": "a"}}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			program, err := expr.Compile(test.input, expr.Env(env))
+			require.NoError(t, err)
+
+			out, err := expr.Run(program, env)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, out)
+		})
+	}
+}
+
+func TestBuiltin_sort_i64(t *testing.T) {
+	env := map[string]any{
+		"array": []int{1, 2, 3},
+		"i64":   int64(1),
+	}
+
+	program, err := expr.Compile(`sort(map(array, i64))`, expr.Env(env))
+	require.NoError(t, err)
+
+	out, err := expr.Run(program, env)
+	require.NoError(t, err)
+	assert.Equal(t, []any{int64(1), int64(1), int64(1)}, out)
+}
+
+func TestBuiltin_bitOpsFunc(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{`bitnot(156)`, -157},
+		{`bitand(bitnot(156), 255)`, 99},
+		{`bitor(987, -123)`, -33},
+		{`bitxor(15, 32)`, 47},
+		{`bitshl(39, 3)`, 312},
+		{`bitshr(5, 1)`, 2},
+		{`bitushr(-5, 2)`, 4611686018427387902},
+		{`bitnand(35, 9)`, 34},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			program, err := expr.Compile(test.input, expr.Env(nil))
+			require.NoError(t, err)
+
+			out, err := expr.Run(program, nil)
+			fmt.Printf("%v : %v", test.input, out)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, out)
+		})
+	}
+}
+
+type customInt int
+
+func Test_int_unwraps_underlying_value(t *testing.T) {
+	env := map[string]any{
+		"customInt": customInt(42),
+	}
+	program, err := expr.Compile(`int(customInt) == 42`, expr.Env(env))
+	require.NoError(t, err)
+
+	out, err := expr.Run(program, env)
+	require.NoError(t, err)
+	assert.Equal(t, true, out)
 }

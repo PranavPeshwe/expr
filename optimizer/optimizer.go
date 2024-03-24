@@ -1,8 +1,8 @@
 package optimizer
 
 import (
-	. "github.com/antonmedv/expr/ast"
-	"github.com/antonmedv/expr/conf"
+	. "github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/conf"
 )
 
 func Optimize(node *Node, config *conf.Config) error {
@@ -32,10 +32,10 @@ func Optimize(node *Node, config *conf.Config) error {
 		}
 	}
 	Walk(node, &inRange{})
-	Walk(node, &constRange{})
 	Walk(node, &filterMap{})
 	Walk(node, &filterLen{})
 	Walk(node, &filterLast{})
 	Walk(node, &filterFirst{})
+	Walk(node, &predicateCombination{})
 	return nil
 }

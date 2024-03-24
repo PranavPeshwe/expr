@@ -3,7 +3,7 @@ package lexer
 import (
 	"strings"
 
-	"github.com/antonmedv/expr/parser/utils"
+	"github.com/expr-lang/expr/parser/utils"
 )
 
 type stateFn func(*lexer) stateFn
@@ -23,6 +23,8 @@ func root(l *lexer) stateFn {
 			l.error("%v", err)
 		}
 		l.emitValue(String, str)
+	case r == '`':
+		l.scanRawString(r)
 	case '0' <= r && r <= '9':
 		l.backup()
 		return number
@@ -35,11 +37,14 @@ func root(l *lexer) stateFn {
 	case r == '|':
 		l.accept("|")
 		l.emit(Operator)
+	case r == ':':
+		l.accept(":")
+		l.emit(Operator)
 	case strings.ContainsRune("([{", r):
 		l.emit(Bracket)
 	case strings.ContainsRune(")]}", r):
 		l.emit(Bracket)
-	case strings.ContainsRune(",:;%+-^", r): // single rune operator
+	case strings.ContainsRune(",;%+-^", r): // single rune operator
 		l.emit(Operator)
 	case strings.ContainsRune("&!=*<>", r): // possible double rune operator
 		l.accept("&=*")

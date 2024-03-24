@@ -1,17 +1,20 @@
 package expr
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 
-	"github.com/antonmedv/expr/ast"
-	"github.com/antonmedv/expr/checker"
-	"github.com/antonmedv/expr/compiler"
-	"github.com/antonmedv/expr/conf"
-	"github.com/antonmedv/expr/file"
-	"github.com/antonmedv/expr/optimizer"
-	"github.com/antonmedv/expr/parser"
-	"github.com/antonmedv/expr/vm"
+	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/builtin"
+	"github.com/expr-lang/expr/checker"
+	"github.com/expr-lang/expr/compiler"
+	"github.com/expr-lang/expr/conf"
+	"github.com/expr-lang/expr/file"
+	"github.com/expr-lang/expr/optimizer"
+	"github.com/expr-lang/expr/parser"
+	"github.com/expr-lang/expr/patcher"
+	"github.com/expr-lang/expr/vm"
 )
 
 // Option for configuring config.
@@ -39,7 +42,13 @@ func AllowUndefinedVariables() Option {
 // Operator allows to replace a binary operator with a function.
 func Operator(operator string, fn ...string) Option {
 	return func(c *conf.Config) {
-		c.Operator(operator, fn...)
+		p := &patcher.OperatorOverloading{
+			Operator:  operator,
+			Overloads: fn,
+			Types:     c.Types,
+			Functions: c.Functions,
+		}
+		c.Visitors = append(c.Visitors, p)
 	}
 }
 
@@ -62,6 +71,7 @@ func AsAny() Option {
 func AsKind(kind reflect.Kind) Option {
 	return func(c *conf.Config) {
 		c.Expect = kind
+		c.ExpectAny = true
 	}
 }
 
@@ -69,6 +79,7 @@ func AsKind(kind reflect.Kind) Option {
 func AsBool() Option {
 	return func(c *conf.Config) {
 		c.Expect = reflect.Bool
+		c.ExpectAny = true
 	}
 }
 
@@ -76,6 +87,7 @@ func AsBool() Option {
 func AsInt() Option {
 	return func(c *conf.Config) {
 		c.Expect = reflect.Int
+		c.ExpectAny = true
 	}
 }
 
@@ -83,6 +95,7 @@ func AsInt() Option {
 func AsInt64() Option {
 	return func(c *conf.Config) {
 		c.Expect = reflect.Int64
+		c.ExpectAny = true
 	}
 }
 
@@ -90,6 +103,17 @@ func AsInt64() Option {
 func AsFloat64() Option {
 	return func(c *conf.Config) {
 		c.Expect = reflect.Float64
+		c.ExpectAny = true
+	}
+}
+
+// WarnOnAny tells the compiler to warn if expression return any type.
+func WarnOnAny() Option {
+	return func(c *conf.Config) {
+		if c.Expect == reflect.Invalid {
+			panic("WarnOnAny() works only with combination with AsInt(), AsBool(), etc. options")
+		}
+		c.ExpectAny = false
 	}
 }
 
@@ -121,7 +145,7 @@ func Function(name string, fn func(params ...any) (any, error), types ...any) Op
 			}
 			ts[i] = t
 		}
-		c.Functions[name] = &ast.Function{
+		c.Functions[name] = &builtin.Function{
 			Name:  name,
 			Func:  fn,
 			Types: ts,
@@ -152,6 +176,13 @@ func EnableBuiltin(name string) Option {
 	}
 }
 
+// WithContext passes context to all functions calls with a context.Context argument.
+func WithContext(name string) Option {
+	return Patch(patcher.WithContext{
+		Name: name,
+	})
+}
+
 // Compile parses and compiles given input expression to bytecode program.
 func Compile(input string, ops ...Option) (*vm.Program, error) {
 	config := conf.CreateNew()
@@ -163,24 +194,30 @@ func Compile(input string, ops ...Option) (*vm.Program, error) {
 	}
 	config.Check()
 
-	if len(config.Operators) > 0 {
-		config.Visitors = append(config.Visitors, &conf.OperatorPatcher{
-			Operators: config.Operators,
-			Types:     config.Types,
-		})
-	}
-
 	tree, err := parser.ParseWithConfig(input, config)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(config.Visitors) > 0 {
-		for _, v := range config.Visitors {
-			// We need to perform types check, because some visitors may rely on
-			// types information available in the tree.
-			_, _ = checker.Check(tree, config)
-			ast.Walk(&tree.Node, v)
+		for i := 0; i < 1000; i++ {
+			more := false
+			for _, v := range config.Visitors {
+				// We need to perform types check, because some visitors may rely on
+				// types information available in the tree.
+				_, _ = checker.Check(tree, config)
+
+				ast.Walk(&tree.Node, v)
+
+				if v, ok := v.(interface {
+					ShouldRepeat() bool
+				}); ok {
+					more = more || v.ShouldRepeat()
+				}
+			}
+			if !more {
+				break
+			}
 		}
 	}
 	_, err = checker.Check(tree, config)
@@ -191,7 +228,8 @@ func Compile(input string, ops ...Option) (*vm.Program, error) {
 	if config.Optimize {
 		err = optimizer.Optimize(&tree.Node, config)
 		if err != nil {
-			if fileError, ok := err.(*file.Error); ok {
+			var fileError *file.Error
+			if errors.As(err, &fileError) {
 				return nil, fileError.Bind(tree.Source)
 			}
 			return nil, err

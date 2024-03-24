@@ -10,12 +10,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/antonmedv/expr"
-	"github.com/antonmedv/expr/ast"
-	"github.com/antonmedv/expr/checker"
-	"github.com/antonmedv/expr/conf"
-	"github.com/antonmedv/expr/parser"
-	"github.com/antonmedv/expr/test/mock"
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/checker"
+	"github.com/expr-lang/expr/conf"
+	"github.com/expr-lang/expr/parser"
+	"github.com/expr-lang/expr/test/mock"
 )
 
 func TestCheck(t *testing.T) {
@@ -131,6 +131,7 @@ func TestCheck(t *testing.T) {
 		{"(Any.Bool ?? Bool) > 0"},
 		{"Bool ?? Bool"},
 		{"let foo = 1; foo == 1"},
+		{"(Embed).EmbedPointerEmbedInt > 0"},
 	}
 
 	for _, tt := range tests {
@@ -169,9 +170,9 @@ type mock.Foo has no field bar (1:4)
  | Foo['bar']
  | ...^
 
-Foo.Method(Not)
+Foo.Method(42)
 too many arguments to call Method (1:5)
- | Foo.Method(Not)
+ | Foo.Method(42)
  | ....^
 
 Foo.Bar()
@@ -209,9 +210,9 @@ array elements can only be selected using an integer (got string) (1:12)
  | ArrayOfFoo.Not
  | ...........^
 
-FuncParam(Not)
+FuncParam(true)
 not enough arguments to call FuncParam (1:1)
- | FuncParam(Not)
+ | FuncParam(true)
  | ^
 
 MapOfFoo['str'].Not
@@ -399,11 +400,6 @@ invalid operation: < (mismatched types mock.Bar and int) (1:29)
  | all(ArrayOfFoo, {#.Method() < 0})
  | ............................^
 
-map(Any, {0})[0] + "str"
-invalid operation: + (mismatched types int and string) (1:18)
- | map(Any, {0})[0] + "str"
- | .................^
-
 Variadic()
 not enough arguments to call Variadic (1:1)
  | Variadic()
@@ -443,11 +439,6 @@ map(1, {2})
 builtin map takes only array (got int) (1:5)
  | map(1, {2})
  | ....^
-
-map(filter(ArrayOfFoo, {true}), {.Not})
-type mock.Foo has no field Not (1:35)
- | map(filter(ArrayOfFoo, {true}), {.Not})
- | ..................................^
 
 ArrayOfFoo[Foo]
 array elements can only be selected using an integer (got mock.Foo) (1:12)
@@ -553,6 +544,11 @@ unknown pointer #unknown (1:11)
 cannot use int as type string in array (1:4)
  | 42 in ["a", "b", "c"]
  | ...^
+
+"foo" matches "[+"
+error parsing regexp: missing closing ]: ` + "`[+`" + ` (1:7)
+ | "foo" matches "[+"
+ | ......^
 `
 
 func TestCheck_error(t *testing.T) {
@@ -636,7 +632,7 @@ func TestCheck_TaggedFieldName(t *testing.T) {
 	tree, err := parser.Parse(`foo.bar`)
 	require.NoError(t, err)
 
-	config := &conf.Config{}
+	config := conf.CreateNew()
 	expr.Env(struct {
 		x struct {
 			y bool `expr:"bar"`
@@ -718,30 +714,6 @@ func TestCheck_AllowUndefinedVariables_OptionalChaining(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestCheck_OperatorOverload(t *testing.T) {
-	type Date struct{}
-	env := map[string]any{
-		"a": Date{},
-		"b": Date{},
-		"add": func(a, b Date) bool {
-			return true
-		},
-	}
-	tree, err := parser.Parse(`a + b`)
-	require.NoError(t, err)
-
-	config := conf.New(env)
-	expr.AsBool()(config)
-
-	_, err = checker.Check(tree, config)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid operation: + (mismatched types checker_test.Date and checker_test.Date)")
-
-	expr.Operator("+", "add")(config)
-	_, err = checker.Check(tree, config)
-	require.NoError(t, err)
-}
-
 func TestCheck_PointerNode(t *testing.T) {
 	_, err := checker.Check(&parser.Tree{Node: &ast.PointerNode{}}, nil)
 	assert.Error(t, err)
@@ -774,49 +746,6 @@ func TestCheck_TypeWeights(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
-}
-
-func TestCheck_CallFastTyped(t *testing.T) {
-	env := map[string]any{
-		"fn": func([]any, string) string {
-			return "foo"
-		},
-	}
-
-	tree, err := parser.Parse("fn([1, 2], 'bar')")
-	require.NoError(t, err)
-
-	_, err = checker.Check(tree, conf.New(env))
-	require.NoError(t, err)
-
-	require.False(t, tree.Node.(*ast.CallNode).Fast)
-	require.Equal(t, 22, tree.Node.(*ast.CallNode).Typed)
-}
-
-func TestCheck_CallFastTyped_Method(t *testing.T) {
-	env := mock.Env{}
-
-	tree, err := parser.Parse("FuncTyped('bar')")
-	require.NoError(t, err)
-
-	_, err = checker.Check(tree, conf.New(env))
-	require.NoError(t, err)
-
-	require.False(t, tree.Node.(*ast.CallNode).Fast)
-	require.Equal(t, 42, tree.Node.(*ast.CallNode).Typed)
-}
-
-func TestCheck_CallTyped_excludes_named_functions(t *testing.T) {
-	env := mock.Env{}
-
-	tree, err := parser.Parse("FuncNamed('bar')")
-	require.NoError(t, err)
-
-	_, err = checker.Check(tree, conf.New(env))
-	require.NoError(t, err)
-
-	require.False(t, tree.Node.(*ast.CallNode).Fast)
-	require.Equal(t, 0, tree.Node.(*ast.CallNode).Typed)
 }
 
 func TestCheck_works_with_nil_types(t *testing.T) {
@@ -907,8 +836,7 @@ func TestCheck_Function_types_are_checked(t *testing.T) {
 
 			_, err = checker.Check(tree, config)
 			require.NoError(t, err)
-			require.NotNil(t, tree.Node.(*ast.CallNode).Func)
-			require.Equal(t, "add", tree.Node.(*ast.CallNode).Func.Name)
+			require.Equal(t, reflect.Int, tree.Node.Type().Kind())
 		})
 	}
 
@@ -942,8 +870,7 @@ func TestCheck_Function_without_types(t *testing.T) {
 
 	_, err = checker.Check(tree, config)
 	require.NoError(t, err)
-	require.NotNil(t, tree.Node.(*ast.CallNode).Func)
-	require.Equal(t, "add", tree.Node.(*ast.CallNode).Func.Name)
+	require.Equal(t, reflect.Interface, tree.Node.Type().Kind())
 }
 
 func TestCheck_dont_panic_on_nil_arguments_for_builtins(t *testing.T) {
@@ -1033,7 +960,7 @@ func TestCheck_builtin_without_call(t *testing.T) {
 		err   string
 	}{
 		{`len + 1`, "invalid operation: + (mismatched types func(...interface {}) (interface {}, error) and int) (1:5)\n | len + 1\n | ....^"},
-		{`string.A`, "type func(...interface {}) (interface {}, error)[string] is undefined (1:8)\n | string.A\n | .......^"},
+		{`string.A`, "type func(interface {}) string[string] is undefined (1:8)\n | string.A\n | .......^"},
 	}
 
 	for _, test := range tests {

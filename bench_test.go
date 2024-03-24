@@ -3,9 +3,10 @@ package expr_test
 import (
 	"testing"
 
-	"github.com/antonmedv/expr"
-	"github.com/antonmedv/expr/vm"
 	"github.com/stretchr/testify/require"
+
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/vm"
 )
 
 func Benchmark_expr(b *testing.B) {
@@ -485,7 +486,7 @@ func Benchmark_sortBy(b *testing.B) {
 		env["arr"].([]Foo)[i] = Foo{Value: v.(int)}
 	}
 
-	program, err := expr.Compile(`sortBy(arr, "Value")`, expr.Env(env))
+	program, err := expr.Compile(`sortBy(arr, .Value)`, expr.Env(env))
 	require.NoError(b, err)
 
 	var out any

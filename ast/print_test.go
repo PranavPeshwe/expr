@@ -3,10 +3,11 @@ package ast_test
 import (
 	"testing"
 
-	"github.com/antonmedv/expr/ast"
-	"github.com/antonmedv/expr/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/parser"
 )
 
 func TestPrint(t *testing.T) {
@@ -27,6 +28,8 @@ func TestPrint(t *testing.T) {
 		{`a["the b"]`, `a["the b"]`},
 		{`a.b[0]`, `a.b[0]`},
 		{`a?.b`, `a?.b`},
+		{`x[0][1]`, `x[0][1]`},
+		{`x?.[0]?.[1]`, `x?.[0]?.[1]`},
 		{`-a`, `-a`},
 		{`!a`, `!a`},
 		{`not a`, `not a`},
@@ -41,8 +44,8 @@ func TestPrint(t *testing.T) {
 		{`a not in b`, `not (a in b)`},
 		{`a and b`, `a and b`},
 		{`a or b`, `a or b`},
-		{`a or b and c`, `a or b and c`},
-		{`a or (b and c)`, `a or b and c`},
+		{`a or b and c`, `a or (b and c)`},
+		{`a or (b and c)`, `a or (b and c)`},
 		{`(a or b) and c`, `(a or b) and c`},
 		{`a ? b : c`, `a ? b : c`},
 		{`a ? b : c ? d : e`, `a ? b : (c ? d : e)`},
@@ -67,6 +70,7 @@ func TestPrint(t *testing.T) {
 		{`a[1:]`, `a[1:]`},
 		{`a[1:]`, `a[1:]`},
 		{`a[:]`, `a[:]`},
+		{`(nil ?? 1) > 0`, `(nil ?? 1) > 0`},
 	}
 
 	for _, tt := range tests {
@@ -86,7 +90,7 @@ func TestPrint_MemberNode(t *testing.T) {
 		Property: &ast.StringNode{Value: "b c"},
 		Optional: true,
 	}
-	require.Equal(t, `get(a, "b c")`, node.String())
+	require.Equal(t, `a?.["b c"]`, node.String())
 }
 
 func TestPrint_ConstantNode(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/antonmedv/expr/file"
+	"github.com/expr-lang/expr/file"
 )
 
 func Lex(source *file.Source) ([]Token, error) {
@@ -217,5 +217,19 @@ func (l *lexer) scanString(quote rune) (n int) {
 		}
 		n++
 	}
+	return
+}
+
+func (l *lexer) scanRawString(quote rune) (n int) {
+	ch := l.next() // read character after back tick
+	for ch != quote {
+		if ch == eof {
+			l.error("literal not terminated")
+			return
+		}
+		ch = l.next()
+		n++
+	}
+	l.emitValue(String, l.input[l.start+1:l.end-1])
 	return
 }

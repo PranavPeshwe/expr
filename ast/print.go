@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/antonmedv/expr/parser/operator"
-	"github.com/antonmedv/expr/parser/utils"
+	"github.com/expr-lang/expr/parser/operator"
+	"github.com/expr-lang/expr/parser/utils"
 )
 
 func (n *NilNode) String() string {
@@ -58,18 +58,49 @@ func (n *UnaryNode) String() string {
 }
 
 func (n *BinaryNode) String() string {
-	var left, right string
-	if b, ok := n.Left.(*BinaryNode); ok && operator.Less(b.Operator, n.Operator) {
-		left = fmt.Sprintf("(%s)", n.Left.String())
-	} else {
-		left = n.Left.String()
+	if n.Operator == ".." {
+		return fmt.Sprintf("%s..%s", n.Left, n.Right)
 	}
-	if b, ok := n.Right.(*BinaryNode); ok && operator.Less(b.Operator, n.Operator) {
-		right = fmt.Sprintf("(%s)", n.Right.String())
-	} else {
-		right = n.Right.String()
+
+	var lhs, rhs string
+	var lwrap, rwrap bool
+
+	lb, ok := n.Left.(*BinaryNode)
+	if ok {
+		if operator.Less(lb.Operator, n.Operator) {
+			lwrap = true
+		}
+		if lb.Operator == "??" {
+			lwrap = true
+		}
+		if operator.IsBoolean(lb.Operator) && n.Operator != lb.Operator {
+			lwrap = true
+		}
 	}
-	return fmt.Sprintf("%s %s %s", left, n.Operator, right)
+
+	rb, ok := n.Right.(*BinaryNode)
+	if ok {
+		if operator.Less(rb.Operator, n.Operator) {
+			rwrap = true
+		}
+		if operator.IsBoolean(rb.Operator) && n.Operator != rb.Operator {
+			rwrap = true
+		}
+	}
+
+	if lwrap {
+		lhs = fmt.Sprintf("(%s)", n.Left.String())
+	} else {
+		lhs = n.Left.String()
+	}
+
+	if rwrap {
+		rhs = fmt.Sprintf("(%s)", n.Right.String())
+	} else {
+		rhs = n.Right.String()
+	}
+
+	return fmt.Sprintf("%s %s %s", lhs, n.Operator, rhs)
 }
 
 func (n *ChainNode) String() string {
@@ -81,7 +112,7 @@ func (n *MemberNode) String() string {
 		if str, ok := n.Property.(*StringNode); ok && utils.IsValidIdentifier(str.Value) {
 			return fmt.Sprintf("%s?.%s", n.Node.String(), str.Value)
 		} else {
-			return fmt.Sprintf("get(%s, %s)", n.Node.String(), n.Property.String())
+			return fmt.Sprintf("%s?.[%s]", n.Node.String(), n.Property.String())
 		}
 	}
 	if str, ok := n.Property.(*StringNode); ok && utils.IsValidIdentifier(str.Value) {
@@ -127,7 +158,7 @@ func (n *ClosureNode) String() string {
 }
 
 func (n *PointerNode) String() string {
-	return "#"
+	return fmt.Sprintf("#%s", n.Name)
 }
 
 func (n *VariableDeclaratorNode) String() string {

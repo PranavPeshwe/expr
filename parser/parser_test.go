@@ -5,10 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	. "github.com/antonmedv/expr/ast"
-	"github.com/antonmedv/expr/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	. "github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/parser"
 )
 
 func TestParse(t *testing.T) {
@@ -25,6 +26,11 @@ func TestParse(t *testing.T) {
 			&StringNode{Value: "str"},
 		},
 		{
+			"`hello\nworld`",
+			&StringNode{Value: `hello
+world`},
+		},
+		{
 			"3",
 			&IntegerNode{Value: 3},
 		},
@@ -35,6 +41,26 @@ func TestParse(t *testing.T) {
 		{
 			"0x6E",
 			&IntegerNode{Value: 110},
+		},
+		{
+			"0X63",
+			&IntegerNode{Value: 99},
+		},
+		{
+			"0o600",
+			&IntegerNode{Value: 384},
+		},
+		{
+			"0O45",
+			&IntegerNode{Value: 37},
+		},
+		{
+			"0b10",
+			&IntegerNode{Value: 2},
+		},
+		{
+			"0B101011",
+			&IntegerNode{Value: 43},
 		},
 		{
 			"10_000_000",
@@ -152,13 +178,13 @@ func TestParse(t *testing.T) {
 		{
 			"foo.bar()",
 			&CallNode{Callee: &MemberNode{Node: &IdentifierNode{Value: "foo"},
-				Property: &StringNode{Value: "bar"}},
+				Property: &StringNode{Value: "bar"}, Method: true},
 				Arguments: []Node{}},
 		},
 		{
 			`foo.bar("arg1", 2, true)`,
 			&CallNode{Callee: &MemberNode{Node: &IdentifierNode{Value: "foo"},
-				Property: &StringNode{Value: "bar"}},
+				Property: &StringNode{Value: "bar"}, Method: true},
 				Arguments: []Node{&StringNode{Value: "arg1"},
 					&IntegerNode{Value: 2},
 					&BoolNode{Value: true}}},
@@ -194,16 +220,16 @@ func TestParse(t *testing.T) {
 									Property: &StringNode{
 										Value: "b",
 									},
+									Method: true,
 								},
 								Arguments: []Node{},
-								Fast:      false,
 							},
 							Property: &StringNode{
 								Value: "c",
 							},
+							Method: true,
 						},
 						Arguments: []Node{},
-						Fast:      false,
 					},
 					Property: &StringNode{
 						Value: "d",
@@ -340,6 +366,62 @@ func TestParse(t *testing.T) {
 				Node: &IdentifierNode{Value: "in_var"}},
 		},
 		{
+			"-1 not in [1, 2, 3, 4]",
+			&UnaryNode{Operator: "not",
+				Node: &BinaryNode{Operator: "in",
+					Left: &UnaryNode{Operator: "-", Node: &IntegerNode{Value: 1}},
+					Right: &ArrayNode{Nodes: []Node{
+						&IntegerNode{Value: 1},
+						&IntegerNode{Value: 2},
+						&IntegerNode{Value: 3},
+						&IntegerNode{Value: 4},
+					}}}},
+		},
+		{
+			"1*8 not in [1, 2, 3, 4]",
+			&UnaryNode{Operator: "not",
+				Node: &BinaryNode{Operator: "in",
+					Left: &BinaryNode{Operator: "*",
+						Left:  &IntegerNode{Value: 1},
+						Right: &IntegerNode{Value: 8},
+					},
+					Right: &ArrayNode{Nodes: []Node{
+						&IntegerNode{Value: 1},
+						&IntegerNode{Value: 2},
+						&IntegerNode{Value: 3},
+						&IntegerNode{Value: 4},
+					}}}},
+		},
+		{
+			"2==2 ? false : 3 not in [1, 2, 5]",
+			&ConditionalNode{
+				Cond: &BinaryNode{
+					Operator: "==",
+					Left:     &IntegerNode{Value: 2},
+					Right:    &IntegerNode{Value: 2},
+				},
+				Exp1: &BoolNode{Value: false},
+				Exp2: &UnaryNode{
+					Operator: "not",
+					Node: &BinaryNode{
+						Operator: "in",
+						Left:     &IntegerNode{Value: 3},
+						Right: &ArrayNode{Nodes: []Node{
+							&IntegerNode{Value: 1},
+							&IntegerNode{Value: 2},
+							&IntegerNode{Value: 5},
+						}}}}},
+		},
+		{
+			"'foo' + 'bar' not matches 'foobar'",
+			&UnaryNode{Operator: "not",
+				Node: &BinaryNode{Operator: "matches",
+					Left: &BinaryNode{Operator: "+",
+						Left:  &StringNode{Value: "foo"},
+						Right: &StringNode{Value: "bar"}},
+					Right: &StringNode{Value: "foobar"}}},
+		},
+		{
 			"all(Tickets, #)",
 			&BuiltinNode{
 				Name: "all",
@@ -474,6 +556,97 @@ func TestParse(t *testing.T) {
 				},
 			},
 		},
+		{
+			`::split("a,b,c", ",")`,
+			&BuiltinNode{
+				Name: "split",
+				Arguments: []Node{
+					&StringNode{Value: "a,b,c"},
+					&StringNode{Value: ","},
+				},
+			},
+		},
+		{
+			`::split("a,b,c", ",")[0]`,
+			&MemberNode{
+				Node: &BuiltinNode{
+					Name: "split",
+					Arguments: []Node{
+						&StringNode{Value: "a,b,c"},
+						&StringNode{Value: ","},
+					},
+				},
+				Property: &IntegerNode{Value: 0},
+			},
+		},
+		{
+			`"hello"[1:3]`,
+			&SliceNode{
+				Node: &StringNode{Value: "hello"},
+				From: &IntegerNode{Value: 1},
+				To:   &IntegerNode{Value: 3},
+			},
+		},
+		{
+			`1 < 2 > 3`,
+			&BinaryNode{
+				Operator: "&&",
+				Left: &BinaryNode{
+					Operator: "<",
+					Left:     &IntegerNode{Value: 1},
+					Right:    &IntegerNode{Value: 2},
+				},
+				Right: &BinaryNode{
+					Operator: ">",
+					Left:     &IntegerNode{Value: 2},
+					Right:    &IntegerNode{Value: 3},
+				},
+			},
+		},
+		{
+			`1 < 2 < 3 < 4`,
+			&BinaryNode{
+				Operator: "&&",
+				Left: &BinaryNode{
+					Operator: "&&",
+					Left: &BinaryNode{
+						Operator: "<",
+						Left:     &IntegerNode{Value: 1},
+						Right:    &IntegerNode{Value: 2},
+					},
+					Right: &BinaryNode{
+						Operator: "<",
+						Left:     &IntegerNode{Value: 2},
+						Right:    &IntegerNode{Value: 3},
+					},
+				},
+				Right: &BinaryNode{
+					Operator: "<",
+					Left:     &IntegerNode{Value: 3},
+					Right:    &IntegerNode{Value: 4},
+				},
+			},
+		},
+		{
+			`1 < 2 < 3 == true`,
+			&BinaryNode{
+				Operator: "==",
+				Left: &BinaryNode{
+					Operator: "&&",
+					Left: &BinaryNode{
+						Operator: "<",
+						Left:     &IntegerNode{Value: 1},
+						Right:    &IntegerNode{Value: 2},
+					},
+					Right: &BinaryNode{
+						Operator: "<",
+						Left:     &IntegerNode{Value: 2},
+						Right:    &IntegerNode{Value: 3},
+					},
+				},
+				Right: &BoolNode{Value: true},
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.input, func(t *testing.T) {
@@ -549,6 +722,51 @@ foo ?? bar || baz
 Operator (||) and coalesce expressions (??) cannot be mixed. Wrap either by parentheses. (1:12)
  | foo ?? bar || baz
  | ...........^
+
+0b15
+bad number syntax: "0b15" (1:5)
+ | 0b15
+ | ....^
+
+0X10G
+bad number syntax: "0X10G" (1:6)
+ | 0X10G
+ | .....^
+
+0o1E
+invalid float literal: strconv.ParseFloat: parsing "0o1E": invalid syntax (1:4)
+ | 0o1E
+ | ...^
+
+0b1E
+invalid float literal: strconv.ParseFloat: parsing "0b1E": invalid syntax (1:4)
+ | 0b1E
+ | ...^
+
+0b1E+6
+bad number syntax: "0b1E+6" (1:7)
+ | 0b1E+6
+ | ......^
+
+0b1E+1
+invalid float literal: strconv.ParseFloat: parsing "0b1E+1": invalid syntax (1:6)
+ | 0b1E+1
+ | .....^
+
+0o1E+1
+invalid float literal: strconv.ParseFloat: parsing "0o1E+1": invalid syntax (1:6)
+ | 0o1E+1
+ | .....^
+
+1E
+invalid float literal: strconv.ParseFloat: parsing "1E": invalid syntax (1:2)
+ | 1E
+ | .^
+
+1 not == [1, 2, 5]
+unexpected token Operator("==") (1:7)
+ | 1 not == [1, 2, 5]
+ | ......^
 `
 
 func TestParse_error(t *testing.T) {
@@ -646,6 +864,19 @@ func TestParse_optional_chaining(t *testing.T) {
 						},
 					},
 					Property: &StringNode{Value: "baz"},
+					Optional: true,
+				},
+			},
+		},
+		{
+			"foo.bar?.[0]",
+			&ChainNode{
+				Node: &MemberNode{
+					Node: &MemberNode{
+						Node:     &IdentifierNode{Value: "foo"},
+						Property: &StringNode{Value: "bar"},
+					},
+					Property: &IntegerNode{Value: 0},
 					Optional: true,
 				},
 			},

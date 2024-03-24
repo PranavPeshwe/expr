@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
-	. "github.com/antonmedv/expr/vm"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+
+	. "github.com/expr-lang/expr/vm"
 )
 
 func StartDebugger(program *Program, env any) {
@@ -59,7 +60,7 @@ func StartDebugger(program *Program, env any) {
 
 	index := make(map[int]int)
 	var buf strings.Builder
-	program.Opcodes(&buf)
+	program.DisassembleWriter(&buf)
 
 	for row, line := range strings.Split(buf.String(), "\n") {
 		if line == "" {
@@ -112,14 +113,17 @@ func StartDebugger(program *Program, env any) {
 			}
 
 			stack.Clear()
-			for i, value := range vm.Stack() {
+			for i, value := range vm.Stack {
 				stack.SetCellSimple(i, 0, fmt.Sprintf("% *d: ", 2, i))
 				stack.SetCellSimple(i, 1, fmt.Sprintf("%#v", value))
 			}
 			stack.ScrollToEnd()
 
 			scope.Clear()
-			s := vm.Scope()
+			var s *Scope
+			if len(vm.Scopes) > 0 {
+				s = vm.Scopes[len(vm.Scopes)-1]
+			}
 			if s != nil {
 				type pair struct {
 					key   string
@@ -130,9 +134,6 @@ func StartDebugger(program *Program, env any) {
 				keys = append(keys, pair{"Index", s.Index})
 				keys = append(keys, pair{"Len", s.Len})
 				keys = append(keys, pair{"Count", s.Count})
-				if s.GroupBy != nil {
-					keys = append(keys, pair{"GroupBy", s.GroupBy})
-				}
 				if s.Acc != nil {
 					keys = append(keys, pair{"Acc", s.Acc})
 				}

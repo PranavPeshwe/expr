@@ -6,46 +6,19 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/antonmedv/expr/ast"
-	"github.com/antonmedv/expr/checker"
-	"github.com/antonmedv/expr/compiler"
-	"github.com/antonmedv/expr/conf"
-	"github.com/antonmedv/expr/file"
-	"github.com/antonmedv/expr/parser"
-	"github.com/antonmedv/expr/vm"
 	"github.com/stretchr/testify/require"
+
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/checker"
+	"github.com/expr-lang/expr/compiler"
+	"github.com/expr-lang/expr/conf"
+	"github.com/expr-lang/expr/parser"
+	"github.com/expr-lang/expr/vm"
 )
 
 func TestRun_NilProgram(t *testing.T) {
 	_, err := vm.Run(nil, nil)
 	require.Error(t, err)
-}
-
-func TestRun_Debugger(t *testing.T) {
-	input := `[1, 2]`
-
-	node, err := parser.Parse(input)
-	require.NoError(t, err)
-
-	program, err := compiler.Compile(node, nil)
-	require.NoError(t, err)
-
-	debug := vm.Debug()
-	go func() {
-		debug.Step()
-		debug.Step()
-		debug.Step()
-		debug.Step()
-	}()
-	go func() {
-		for range debug.Position() {
-		}
-	}()
-
-	_, err = debug.Run(program, nil)
-	require.NoError(t, err)
-	require.Len(t, debug.Stack(), 0)
-	require.Nil(t, debug.Scope())
 }
 
 func TestRun_ReuseVM(t *testing.T) {
@@ -60,6 +33,28 @@ func TestRun_ReuseVM(t *testing.T) {
 	require.NoError(t, err)
 	_, err = reuse.Run(program, nil)
 	require.NoError(t, err)
+}
+
+func TestRun_ReuseVM_for_different_variables(t *testing.T) {
+	v := vm.VM{}
+
+	program, err := expr.Compile(`let a = 1; a + 1`)
+	require.NoError(t, err)
+	out, err := v.Run(program, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, out)
+
+	program, err = expr.Compile(`let a = 2; a + 1`)
+	require.NoError(t, err)
+	out, err = v.Run(program, nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, out)
+
+	program, err = expr.Compile(`let a = 2; let b = 2; a + b`)
+	require.NoError(t, err)
+	out, err = v.Run(program, nil)
+	require.NoError(t, err)
+	require.Equal(t, 4, out)
 }
 
 func TestRun_Cast(t *testing.T) {
@@ -145,10 +140,6 @@ func (ErrorEnv) WillError(param string) (bool, error) {
 	return true, nil
 }
 
-func (ErrorEnv) FastError(...any) any {
-	return true
-}
-
 func (InnerEnv) WillError(param string) (bool, error) {
 	if param == "yes" {
 		return false, errors.New("inner error")
@@ -200,27 +191,6 @@ func TestRun_FastMethods(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "hello world", out)
-}
-
-func TestRun_FastMethodWithError(t *testing.T) {
-	input := `FastError()`
-
-	tree, err := parser.Parse(input)
-	require.NoError(t, err)
-
-	env := ErrorEnv{}
-	funcConf := conf.New(env)
-	_, err = checker.Check(tree, funcConf)
-	require.NoError(t, err)
-	require.True(t, tree.Node.(*ast.CallNode).Fast, "method must be fast")
-
-	program, err := compiler.Compile(tree, funcConf)
-	require.NoError(t, err)
-
-	out, err := vm.Run(program, env)
-	require.NoError(t, err)
-
-	require.Equal(t, true, out)
 }
 
 func TestRun_InnerMethodWithError(t *testing.T) {
@@ -282,7 +252,6 @@ func TestRun_TaggedFieldName(t *testing.T) {
 
 func TestRun_OpInvalid(t *testing.T) {
 	program := &vm.Program{
-		Locations: []file.Location{{0, 0}},
 		Bytecode:  []vm.Opcode{vm.OpInvalid},
 		Arguments: []int{0},
 	}

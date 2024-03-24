@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/antonmedv/expr"
+	"github.com/expr-lang/expr"
 )
 
 //go:embed fuzz_corpus.txt
@@ -32,6 +32,7 @@ func FuzzExpr(f *testing.F) {
 		regexp.MustCompile(`invalid duration`),
 		regexp.MustCompile(`time: missing unit in duration`),
 		regexp.MustCompile(`time: unknown unit .* in duration`),
+		regexp.MustCompile(`unknown time zone`),
 		regexp.MustCompile(`json: unsupported value`),
 		regexp.MustCompile(`unexpected end of JSON input`),
 		regexp.MustCompile(`memory budget exceeded`),
@@ -42,18 +43,25 @@ func FuzzExpr(f *testing.F) {
 		regexp.MustCompile(`reflect: call of reflect.Value.Call on .* Value`),
 		regexp.MustCompile(`reflect: call of reflect.Value.Index on map Value`),
 		regexp.MustCompile(`reflect: call of reflect.Value.Len on .* Value`),
+		regexp.MustCompile(`reflect: string index out of range`),
 		regexp.MustCompile(`strings: negative Repeat count`),
 		regexp.MustCompile(`strings: illegal bytes to escape`),
 		regexp.MustCompile(`operator "in" not defined on int`),
 		regexp.MustCompile(`invalid date .*`),
 		regexp.MustCompile(`cannot parse .* as .*`),
 		regexp.MustCompile(`operator "in" not defined on .*`),
+		regexp.MustCompile(`cannot sum .*`),
 	}
 
 	env := NewEnv()
+	fn := Func()
 
 	f.Fuzz(func(t *testing.T, code string) {
-		program, err := expr.Compile(code, expr.Env(env))
+		if len(code) > 1000 {
+			t.Skip("too long code")
+		}
+
+		program, err := expr.Compile(code, expr.Env(env), fn)
 		if err != nil {
 			t.Skipf("compile error: %s", err)
 		}

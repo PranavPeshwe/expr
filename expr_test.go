@@ -1,19 +1,22 @@
 package expr_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/antonmedv/expr"
-	"github.com/antonmedv/expr/ast"
-	"github.com/antonmedv/expr/file"
-	"github.com/antonmedv/expr/test/mock"
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/file"
+	"github.com/expr-lang/expr/test/mock"
 )
 
 func ExampleEval() {
@@ -254,6 +257,17 @@ func ExampleAsFloat64_error() {
 	// Output: expected float64, but got bool
 }
 
+func ExampleWarnOnAny() {
+	// Arrays always have []any type. The expression return type is any.
+	// AsInt() instructs compiler to expect int or any, and cast to int,
+	// if possible. WarnOnAny() instructs to return an error on any type.
+	_, err := expr.Compile(`[42, true, "yes"][0]`, expr.AsInt(), expr.WarnOnAny())
+
+	fmt.Printf("%v", err)
+
+	// Output: expected int, but got interface {}
+}
+
 func ExampleOperator() {
 	code := `
 		Now() > CreatedAt &&
@@ -295,6 +309,47 @@ func ExampleOperator() {
 	fmt.Printf("%v", output)
 
 	// Output: true
+}
+
+func ExampleOperator_Decimal() {
+	type Decimal struct{ N float64 }
+	code := `A + B - C`
+
+	type Env struct {
+		A, B, C Decimal
+		Sub     func(a, b Decimal) Decimal
+		Add     func(a, b Decimal) Decimal
+	}
+
+	options := []expr.Option{
+		expr.Env(Env{}),
+		expr.Operator("+", "Add"),
+		expr.Operator("-", "Sub"),
+	}
+
+	program, err := expr.Compile(code, options...)
+	if err != nil {
+		fmt.Printf("Compile error: %v", err)
+		return
+	}
+
+	env := Env{
+		A:   Decimal{3},
+		B:   Decimal{2},
+		C:   Decimal{1},
+		Sub: func(a, b Decimal) Decimal { return Decimal{a.N - b.N} },
+		Add: func(a, b Decimal) Decimal { return Decimal{a.N + b.N} },
+	}
+
+	output, err := expr.Run(program, env)
+	if err != nil {
+		fmt.Printf("%v", err)
+		return
+	}
+
+	fmt.Printf("%v", output)
+
+	// Output: {4}
 }
 
 func fib(n int) int {
@@ -486,6 +541,47 @@ func ExamplePatch() {
 	fmt.Printf("%v", output)
 
 	// Output : Hello, you, world!
+}
+
+func ExampleWithContext() {
+	env := map[string]any{
+		"fn": func(ctx context.Context, _, _ int) int {
+			// An infinite loop that can be canceled by context.
+			for {
+				select {
+				case <-ctx.Done():
+					return 42
+				}
+			}
+		},
+		"ctx": context.TODO(), // Context should be passed as a variable.
+	}
+
+	program, err := expr.Compile(`fn(1, 2)`,
+		expr.Env(env),
+		expr.WithContext("ctx"), // Pass context variable name.
+	)
+	if err != nil {
+		fmt.Printf("%v", err)
+		return
+	}
+
+	// Cancel context after 100 milliseconds.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+	defer cancel()
+
+	// After program is compiled, context can be passed to Run.
+	env["ctx"] = ctx
+
+	// Run will return 42 after 100 milliseconds.
+	output, err := expr.Run(program, env)
+	if err != nil {
+		fmt.Printf("%v", err)
+		return
+	}
+
+	fmt.Printf("%v", output)
+	// Output: 42
 }
 
 func TestExpr_readme_example(t *testing.T) {
@@ -690,6 +786,10 @@ func TestExpr(t *testing.T) {
 			true,
 		},
 		{
+			`-1 not in [1]`,
+			true,
+		},
+		{
 			`Int32 in [10, 20]`,
 			false,
 		},
@@ -700,6 +800,10 @@ func TestExpr(t *testing.T) {
 		{
 			`String matches ("^" + String + "$")`,
 			true,
+		},
+		{
+			`'foo' + 'bar' not matches 'foobar'`,
+			false,
 		},
 		{
 			`"foobar" contains "bar"`,
@@ -756,6 +860,22 @@ func TestExpr(t *testing.T) {
 		{
 			`len({a: 1, b: 2, c: 2})`,
 			3,
+		},
+		{
+			`max([1, 2, 3])`,
+			3,
+		},
+		{
+			`max(1, 2, 3)`,
+			3,
+		},
+		{
+			`min([1, 2, 3])`,
+			1,
+		},
+		{
+			`min(1, 2, 3)`,
+			1,
 		},
 		{
 			`{foo: 0, bar: 1}`,
@@ -1093,6 +1213,74 @@ func TestExpr(t *testing.T) {
 			`.5 in ArrayOfInt`,
 			false,
 		},
+		{
+			`bitnot(10)`,
+			-11,
+		},
+		{
+			`bitxor(15, 32)`,
+			47,
+		},
+		{
+			`bitand(90, 34)`,
+			2,
+		},
+		{
+			`bitnand(35, 9)`,
+			34,
+		},
+		{
+			`bitor(10, 5)`,
+			15,
+		},
+		{
+			`bitshr(7, 2)`,
+			1,
+		},
+		{
+			`bitshl(7, 2)`,
+			28,
+		},
+		{
+			`bitushr(-100, 5)`,
+			576460752303423484,
+		},
+		{
+			`"hello"[1:3]`,
+			"el",
+		},
+		{
+			`[1, 2, 3]?.[0]`,
+			1,
+		},
+		{
+			`[[1, 2], 3, 4]?.[0]?.[1]`,
+			2,
+		},
+		{
+			`[nil, 3, 4]?.[0]?.[1]`,
+			nil,
+		},
+		{
+			`1 > 2 < 3`,
+			false,
+		},
+		{
+			`1 < 2 < 3`,
+			true,
+		},
+		{
+			`1 < 2 < 3 > 4`,
+			false,
+		},
+		{
+			`1 < 2 < 3 > 2`,
+			true,
+		},
+		{
+			`1 < 2 < 3 == true`,
+			true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1188,6 +1376,16 @@ func TestExpr_optional_chaining_nested_chains(t *testing.T) {
 	got, err := expr.Run(program, env)
 	require.NoError(t, err)
 	assert.Equal(t, "baz", got)
+}
+
+func TestExpr_optional_chaining_array(t *testing.T) {
+	env := map[string]any{}
+	program, err := expr.Compile("foo?.[1]?.[2]?.[3]", expr.Env(env), expr.AllowUndefinedVariables())
+	require.NoError(t, err)
+
+	got, err := expr.Run(program, env)
+	require.NoError(t, err)
+	assert.Equal(t, nil, got)
 }
 
 func TestExpr_eval_with_env(t *testing.T) {
@@ -1869,7 +2067,7 @@ func TestEnv_keyword(t *testing.T) {
 		{"$env[red + irect]", 10},
 		{"$env['String Map']?.five", ""},
 		{"$env.red", "n"},
-		{"$env?.blue", nil},
+		{"$env?.unknown", nil},
 		{"$env.mylist[1]", 2},
 		{"$env?.OtherMap?.a", "b"},
 		{"$env?.OtherMap?.d", ""},
@@ -1914,7 +2112,32 @@ func TestEnv_keyword(t *testing.T) {
 
 		})
 	}
+}
 
+func TestEnv_keyword_with_custom_functions(t *testing.T) {
+	fn := expr.Function("fn", func(params ...any) (any, error) {
+		return "ok", nil
+	})
+
+	var tests = []struct {
+		code  string
+		error bool
+	}{
+		{`fn()`, false},
+		{`$env.fn()`, true},
+		{`$env["fn"]`, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.code, func(t *testing.T) {
+			_, err := expr.Compile(tt.code, expr.Env(mock.Env{}), fn)
+			if tt.error {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestIssue401(t *testing.T) {
@@ -1971,6 +2194,50 @@ func TestMemoryBudget(t *testing.T) {
 	}
 }
 
+func TestExpr_custom_tests(t *testing.T) {
+	f, err := os.Open("custom_tests.json")
+	if os.IsNotExist(err) {
+		t.Skip("no custom tests")
+		return
+	}
+
+	require.NoError(t, err, "open file error")
+	defer f.Close()
+
+	var tests []string
+	err = json.NewDecoder(f).Decode(&tests)
+	require.NoError(t, err, "decode json error")
+
+	for id, tt := range tests {
+		t.Run(fmt.Sprintf("line %v", id+2), func(t *testing.T) {
+			program, err := expr.Compile(tt)
+			require.NoError(t, err)
+
+			timeout := make(chan bool, 1)
+			go func() {
+				time.Sleep(time.Second)
+				timeout <- true
+			}()
+
+			done := make(chan bool, 1)
+			go func() {
+				out, err := expr.Run(program, nil)
+				// Make sure out is used.
+				_ = fmt.Sprintf("%v", out)
+				assert.Error(t, err)
+				done <- true
+			}()
+
+			select {
+			case <-done:
+				// Success.
+			case <-timeout:
+				t.Fatal("timeout")
+			}
+		})
+	}
+}
+
 func TestIssue432(t *testing.T) {
 	env := map[string]any{
 		"func": func(
@@ -1998,4 +2265,262 @@ func TestIssue432(t *testing.T) {
 	out, err := expr.Run(program, env)
 	assert.NoError(t, err)
 	assert.Equal(t, float64(10), out)
+}
+
+func TestIssue453(t *testing.T) {
+	env := map[string]any{
+		"foo": nil,
+	}
+	_, err := expr.Compile(`foo()`, expr.Env(env))
+	require.Error(t, err)
+}
+
+func TestIssue461(t *testing.T) {
+	type EnvStr string
+	type EnvField struct {
+		S   EnvStr
+		Str string
+	}
+	type Env struct {
+		S        EnvStr
+		Str      string
+		EnvField EnvField
+	}
+	var tests = []struct {
+		input string
+		env   Env
+		want  bool
+	}{
+		{
+			input: "Str == S",
+			env:   Env{S: "string", Str: "string"},
+			want:  false,
+		},
+		{
+			input: "Str == Str",
+			env:   Env{Str: "string"},
+			want:  true,
+		},
+		{
+			input: "S == S",
+			env:   Env{Str: "string"},
+			want:  true,
+		},
+		{
+			input: `Str == "string"`,
+			env:   Env{Str: "string"},
+			want:  true,
+		},
+		{
+			input: `S == "string"`,
+			env:   Env{Str: "string"},
+			want:  false,
+		},
+		{
+			input: "EnvField.Str == EnvField.S",
+			env:   Env{EnvField: EnvField{S: "string", Str: "string"}},
+			want:  false,
+		},
+		{
+			input: "EnvField.Str == EnvField.Str",
+			env:   Env{EnvField: EnvField{Str: "string"}},
+			want:  true,
+		},
+		{
+			input: "EnvField.S == EnvField.S",
+			env:   Env{EnvField: EnvField{Str: "string"}},
+			want:  true,
+		},
+		{
+			input: `EnvField.Str == "string"`,
+			env:   Env{EnvField: EnvField{Str: "string"}},
+			want:  true,
+		},
+		{
+			input: `EnvField.S == "string"`,
+			env:   Env{EnvField: EnvField{Str: "string"}},
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			program, err := expr.Compile(tt.input, expr.Env(tt.env), expr.AsBool())
+
+			out, err := expr.Run(program, tt.env)
+			require.NoError(t, err)
+
+			require.Equal(t, tt.want, out)
+		})
+	}
+}
+
+func TestIssue462(t *testing.T) {
+	env := map[string]any{
+		"foo": func() (string, error) {
+			return "bar", nil
+		},
+	}
+	_, err := expr.Compile(`$env.unknown(int())`, expr.Env(env))
+	require.Error(t, err)
+}
+
+func TestIssue_embedded_pointer_struct(t *testing.T) {
+	var tests = []struct {
+		input string
+		env   mock.Env
+		want  any
+	}{
+		{
+			input: "EmbedPointerEmbedInt > 0",
+			env: mock.Env{
+				Embed: mock.Embed{
+					EmbedPointerEmbed: &mock.EmbedPointerEmbed{
+						EmbedPointerEmbedInt: 123,
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			input: "(Embed).EmbedPointerEmbedInt > 0",
+			env: mock.Env{
+				Embed: mock.Embed{
+					EmbedPointerEmbed: &mock.EmbedPointerEmbed{
+						EmbedPointerEmbedInt: 123,
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			input: "(Embed).EmbedPointerEmbedInt > 0",
+			env: mock.Env{
+				Embed: mock.Embed{
+					EmbedPointerEmbed: &mock.EmbedPointerEmbed{
+						EmbedPointerEmbedInt: 0,
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			input: "(Embed).EmbedPointerEmbedMethod(0)",
+			env: mock.Env{
+				Embed: mock.Embed{
+					EmbedPointerEmbed: &mock.EmbedPointerEmbed{
+						EmbedPointerEmbedInt: 0,
+					},
+				},
+			},
+			want: "",
+		},
+		{
+			input: "(Embed).EmbedPointerEmbedPointerReceiverMethod(0)",
+			env: mock.Env{
+				Embed: mock.Embed{
+					EmbedPointerEmbed: nil,
+				},
+			},
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			program, err := expr.Compile(tt.input, expr.Env(tt.env))
+			require.NoError(t, err)
+
+			out, err := expr.Run(program, tt.env)
+			require.NoError(t, err)
+
+			require.Equal(t, tt.want, out)
+		})
+	}
+}
+
+func TestIssue474(t *testing.T) {
+	testCases := []struct {
+		code string
+		fail bool
+	}{
+		{
+			code: `func("invalid")`,
+			fail: true,
+		},
+		{
+			code: `func(true)`,
+			fail: true,
+		},
+		{
+			code: `func([])`,
+			fail: true,
+		},
+		{
+			code: `func({})`,
+			fail: true,
+		},
+		{
+			code: `func(1)`,
+			fail: false,
+		},
+		{
+			code: `func(1.5)`,
+			fail: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		ltc := tc
+		t.Run(ltc.code, func(t *testing.T) {
+			t.Parallel()
+			function := expr.Function("func", func(params ...any) (any, error) {
+				return true, nil
+			}, new(func(float64) bool))
+			_, err := expr.Compile(ltc.code, function)
+			if ltc.fail {
+				if err == nil {
+					t.Error("expected an error, but it was nil")
+					t.FailNow()
+				}
+			} else {
+				if err != nil {
+					t.Errorf("expected nil, but it was %v", err)
+					t.FailNow()
+				}
+			}
+		})
+	}
+}
+
+func TestRaceCondition_variables(t *testing.T) {
+	program, err := expr.Compile(`let foo = 1; foo + 1`, expr.Env(mock.Env{}))
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out, err := expr.Run(program, mock.Env{})
+			require.NoError(t, err)
+			require.Equal(t, 2, out)
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestOperatorDependsOnEnv(t *testing.T) {
+	env := map[string]any{
+		"plus": func(a, b int) int {
+			return 42
+		},
+	}
+	program, err := expr.Compile(`1 + 2`, expr.Operator("+", "plus"), expr.Env(env))
+	require.NoError(t, err)
+
+	out, err := expr.Run(program, env)
+	require.NoError(t, err)
+	assert.Equal(t, 42, out)
 }

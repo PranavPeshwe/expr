@@ -3,14 +3,16 @@ package compiler
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 
-	"github.com/antonmedv/expr/ast"
-	"github.com/antonmedv/expr/builtin"
-	"github.com/antonmedv/expr/conf"
-	"github.com/antonmedv/expr/file"
-	"github.com/antonmedv/expr/parser"
-	. "github.com/antonmedv/expr/vm"
-	"github.com/antonmedv/expr/vm/runtime"
+	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/builtin"
+	"github.com/expr-lang/expr/checker"
+	"github.com/expr-lang/expr/conf"
+	"github.com/expr-lang/expr/file"
+	"github.com/expr-lang/expr/parser"
+	. "github.com/expr-lang/expr/vm"
+	"github.com/expr-lang/expr/vm/runtime"
 )
 
 const (
@@ -25,55 +27,62 @@ func Compile(tree *parser.Tree, config *conf.Config) (program *Program, err erro
 	}()
 
 	c := &compiler{
+		config:         config,
 		locations:      make([]file.Location, 0),
 		constantsIndex: make(map[any]int),
 		functionsIndex: make(map[string]int),
 		debugInfo:      make(map[string]string),
 	}
 
-	if config != nil {
-		c.mapEnv = config.MapEnv
-		c.cast = config.Expect
-	}
-
 	c.compile(tree.Node)
 
-	switch c.cast {
-	case reflect.Int:
-		c.emit(OpCast, 0)
-	case reflect.Int64:
-		c.emit(OpCast, 1)
-	case reflect.Float64:
-		c.emit(OpCast, 2)
+	if c.config != nil {
+		switch c.config.Expect {
+		case reflect.Int:
+			c.emit(OpCast, 0)
+		case reflect.Int64:
+			c.emit(OpCast, 1)
+		case reflect.Float64:
+			c.emit(OpCast, 2)
+		}
+		if c.config.Optimize {
+			c.optimize()
+		}
 	}
 
-	program = &Program{
-		Node:      tree.Node,
-		Source:    tree.Source,
-		Locations: c.locations,
-		Variables: c.variables,
-		Constants: c.constants,
-		Bytecode:  c.bytecode,
-		Arguments: c.arguments,
-		Functions: c.functions,
-		DebugInfo: c.debugInfo,
+	var span *Span
+	if len(c.spans) > 0 {
+		span = c.spans[0]
 	}
+
+	program = NewProgram(
+		tree.Source,
+		tree.Node,
+		c.locations,
+		c.variables,
+		c.constants,
+		c.bytecode,
+		c.arguments,
+		c.functions,
+		c.debugInfo,
+		span,
+	)
 	return
 }
 
 type compiler struct {
+	config         *conf.Config
 	locations      []file.Location
 	bytecode       []Opcode
-	variables      []any
+	variables      int
 	scopes         []scope
 	constants      []any
 	constantsIndex map[any]int
 	functions      []Function
 	functionsIndex map[string]int
 	debugInfo      map[string]string
-	mapEnv         bool
-	cast           reflect.Kind
 	nodes          []ast.Node
+	spans          []*Span
 	chains         [][]int
 	arguments      []int
 }
@@ -114,7 +123,7 @@ func (c *compiler) addConstant(constant any) int {
 	indexable := true
 	hash := constant
 	switch reflect.TypeOf(constant).Kind() {
-	case reflect.Slice, reflect.Map, reflect.Struct:
+	case reflect.Slice, reflect.Map, reflect.Struct, reflect.Func:
 		indexable = false
 	}
 	if field, ok := constant.(*runtime.Field); ok {
@@ -139,41 +148,40 @@ func (c *compiler) addConstant(constant any) int {
 }
 
 func (c *compiler) addVariable(name string) int {
-	c.variables = append(c.variables, nil)
-	p := len(c.variables) - 1
-	c.debugInfo[fmt.Sprintf("var_%d", p)] = name
-	return p
+	c.variables++
+	c.debugInfo[fmt.Sprintf("var_%d", c.variables-1)] = name
+	return c.variables - 1
 }
 
-// emitFunction adds builtin.Function.Func to the program.Functions and emits call opcode.
-func (c *compiler) emitFunction(fn *ast.Function, argsLen int) {
+// emitFunction adds builtin.Function.Func to the program.functions and emits call opcode.
+func (c *compiler) emitFunction(fn *builtin.Function, argsLen int) {
 	switch argsLen {
 	case 0:
-		c.emit(OpCall0, c.addFunction(fn))
+		c.emit(OpCall0, c.addFunction(fn.Name, fn.Func))
 	case 1:
-		c.emit(OpCall1, c.addFunction(fn))
+		c.emit(OpCall1, c.addFunction(fn.Name, fn.Func))
 	case 2:
-		c.emit(OpCall2, c.addFunction(fn))
+		c.emit(OpCall2, c.addFunction(fn.Name, fn.Func))
 	case 3:
-		c.emit(OpCall3, c.addFunction(fn))
+		c.emit(OpCall3, c.addFunction(fn.Name, fn.Func))
 	default:
-		c.emit(OpLoadFunc, c.addFunction(fn))
+		c.emit(OpLoadFunc, c.addFunction(fn.Name, fn.Func))
 		c.emit(OpCallN, argsLen)
 	}
 }
 
-// addFunction adds builtin.Function.Func to the program.Functions and returns its index.
-func (c *compiler) addFunction(fn *ast.Function) int {
+// addFunction adds builtin.Function.Func to the program.functions and returns its index.
+func (c *compiler) addFunction(name string, fn Function) int {
 	if fn == nil {
 		panic("function is nil")
 	}
-	if p, ok := c.functionsIndex[fn.Name]; ok {
+	if p, ok := c.functionsIndex[name]; ok {
 		return p
 	}
 	p := len(c.functions)
-	c.functions = append(c.functions, fn.Func)
-	c.functionsIndex[fn.Name] = p
-	c.debugInfo[fmt.Sprintf("func_%d", p)] = fn.Name
+	c.functions = append(c.functions, fn)
+	c.functionsIndex[name] = p
+	c.debugInfo[fmt.Sprintf("func_%d", p)] = name
 	return p
 }
 
@@ -191,6 +199,28 @@ func (c *compiler) compile(node ast.Node) {
 	defer func() {
 		c.nodes = c.nodes[:len(c.nodes)-1]
 	}()
+
+	if c.config != nil && c.config.Profile {
+		span := &Span{
+			Name:       reflect.TypeOf(node).String(),
+			Expression: node.String(),
+		}
+		if len(c.spans) > 0 {
+			prev := c.spans[len(c.spans)-1]
+			prev.Children = append(prev.Children, span)
+		}
+		c.spans = append(c.spans, span)
+		defer func() {
+			if len(c.spans) > 1 {
+				c.spans = c.spans[:len(c.spans)-1]
+			}
+		}()
+
+		c.emit(OpProfileStart, c.addConstant(span))
+		defer func() {
+			c.emit(OpProfileEnd, c.addConstant(span))
+		}()
+	}
 
 	switch n := node.(type) {
 	case *ast.NilNode:
@@ -253,17 +283,25 @@ func (c *compiler) IdentifierNode(node *ast.IdentifierNode) {
 		c.emit(OpLoadEnv)
 		return
 	}
-	if c.mapEnv {
+
+	var mapEnv bool
+	var types conf.TypesTable
+	if c.config != nil {
+		mapEnv = c.config.MapEnv
+		types = c.config.Types
+	}
+
+	if mapEnv {
 		c.emit(OpLoadFast, c.addConstant(node.Value))
-	} else if len(node.FieldIndex) > 0 {
+	} else if ok, index, name := checker.FieldIndex(types, node); ok {
 		c.emit(OpLoadField, c.addConstant(&runtime.Field{
-			Index: node.FieldIndex,
-			Path:  []string{node.Value},
+			Index: index,
+			Path:  []string{name},
 		}))
-	} else if node.Method {
+	} else if ok, index, name := checker.MethodIndex(types, node); ok {
 		c.emit(OpLoadMethod, c.addConstant(&runtime.Method{
-			Name:  node.Value,
-			Index: node.MethodIndex,
+			Name:  name,
+			Index: index,
 		}))
 	} else {
 		c.emit(OpLoadConst, c.addConstant(node.Value))
@@ -360,16 +398,20 @@ func (c *compiler) BinaryNode(node *ast.BinaryNode) {
 	l := kind(node.Left)
 	r := kind(node.Right)
 
+	leftIsSimple := isSimpleType(node.Left)
+	rightIsSimple := isSimpleType(node.Right)
+	leftAndRightAreSimple := leftIsSimple && rightIsSimple
+
 	switch node.Operator {
 	case "==":
 		c.compile(node.Left)
 		c.derefInNeeded(node.Left)
 		c.compile(node.Right)
-		c.derefInNeeded(node.Left)
+		c.derefInNeeded(node.Right)
 
-		if l == r && l == reflect.Int {
+		if l == r && l == reflect.Int && leftAndRightAreSimple {
 			c.emit(OpEqualInt)
-		} else if l == r && l == reflect.String {
+		} else if l == r && l == reflect.String && leftAndRightAreSimple {
 			c.emit(OpEqualString)
 		} else {
 			c.emit(OpEqual)
@@ -379,7 +421,7 @@ func (c *compiler) BinaryNode(node *ast.BinaryNode) {
 		c.compile(node.Left)
 		c.derefInNeeded(node.Left)
 		c.compile(node.Right)
-		c.derefInNeeded(node.Left)
+		c.derefInNeeded(node.Right)
 		c.emit(OpEqual)
 		c.emit(OpNot)
 
@@ -479,10 +521,14 @@ func (c *compiler) BinaryNode(node *ast.BinaryNode) {
 		c.emit(OpIn)
 
 	case "matches":
-		if node.Regexp != nil {
+		if str, ok := node.Right.(*ast.StringNode); ok {
+			re, err := regexp.Compile(str.Value)
+			if err != nil {
+				panic(err)
+			}
 			c.compile(node.Left)
 			c.derefInNeeded(node.Left)
-			c.emit(OpMatchesConst, c.addConstant(node.Regexp))
+			c.emit(OpMatchesConst, c.addConstant(re))
 		} else {
 			c.compile(node.Left)
 			c.derefInNeeded(node.Left)
@@ -534,6 +580,17 @@ func (c *compiler) BinaryNode(node *ast.BinaryNode) {
 	}
 }
 
+func isSimpleType(node ast.Node) bool {
+	if node == nil {
+		return false
+	}
+	t := node.Type()
+	if t == nil {
+		return false
+	}
+	return t.PkgPath() == ""
+}
+
 func (c *compiler) ChainNode(node *ast.ChainNode) {
 	c.chains = append(c.chains, []int{})
 	c.compile(node.Node)
@@ -545,36 +602,48 @@ func (c *compiler) ChainNode(node *ast.ChainNode) {
 }
 
 func (c *compiler) MemberNode(node *ast.MemberNode) {
-	if node.Method {
+	var types conf.TypesTable
+	if c.config != nil {
+		types = c.config.Types
+	}
+
+	if ok, index, name := checker.MethodIndex(types, node); ok {
 		c.compile(node.Node)
 		c.emit(OpMethod, c.addConstant(&runtime.Method{
-			Name:  node.Name,
-			Index: node.MethodIndex,
+			Name:  name,
+			Index: index,
 		}))
 		return
 	}
 	op := OpFetch
-	index := node.FieldIndex
-	path := []string{node.Name}
 	base := node.Node
-	if len(node.FieldIndex) > 0 {
+
+	ok, index, nodeName := checker.FieldIndex(types, node)
+	path := []string{nodeName}
+
+	if ok {
 		op = OpFetchField
 		for !node.Optional {
-			ident, ok := base.(*ast.IdentifierNode)
-			if ok && len(ident.FieldIndex) > 0 {
-				index = append(ident.FieldIndex, index...)
-				path = append([]string{ident.Value}, path...)
-				c.emitLocation(ident.Location(), OpLoadField, c.addConstant(
-					&runtime.Field{Index: index, Path: path},
-				))
-				return
+			if ident, isIdent := base.(*ast.IdentifierNode); isIdent {
+				if ok, identIndex, name := checker.FieldIndex(types, ident); ok {
+					index = append(identIndex, index...)
+					path = append([]string{name}, path...)
+					c.emitLocation(ident.Location(), OpLoadField, c.addConstant(
+						&runtime.Field{Index: index, Path: path},
+					))
+					return
+				}
 			}
-			member, ok := base.(*ast.MemberNode)
-			if ok && len(member.FieldIndex) > 0 {
-				index = append(member.FieldIndex, index...)
-				path = append([]string{member.Name}, path...)
-				node = member
-				base = member.Node
+
+			if member, isMember := base.(*ast.MemberNode); isMember {
+				if ok, memberIndex, name := checker.FieldIndex(types, member); ok {
+					index = append(memberIndex, index...)
+					path = append([]string{name}, path...)
+					node = member
+					base = member.Node
+				} else {
+					break
+				}
 			} else {
 				break
 			}
@@ -616,15 +685,21 @@ func (c *compiler) CallNode(node *ast.CallNode) {
 	for _, arg := range node.Arguments {
 		c.compile(arg)
 	}
-	if node.Func != nil {
-		c.emitFunction(node.Func, len(node.Arguments))
-		return
+	if ident, ok := node.Callee.(*ast.IdentifierNode); ok {
+		if c.config != nil {
+			if fn, ok := c.config.Functions[ident.Value]; ok {
+				c.emitFunction(fn, len(node.Arguments))
+				return
+			}
+		}
 	}
 	c.compile(node.Callee)
-	if node.Typed > 0 {
-		c.emit(OpCallTyped, node.Typed)
+
+	isMethod, _, _ := checker.MethodIndex(c.config.Types, node.Callee)
+	if index, ok := checker.TypedFuncIndex(node.Callee.Type(), isMethod); ok {
+		c.emit(OpCallTyped, index)
 		return
-	} else if node.Fast {
+	} else if checker.IsFastFunc(node.Callee.Type(), isMethod) {
 		c.emit(OpCallFast, len(node.Arguments))
 	} else {
 		c.emit(OpCall, len(node.Arguments))
@@ -827,11 +902,31 @@ func (c *compiler) BuiltinNode(node *ast.BuiltinNode) {
 	case "groupBy":
 		c.compile(node.Arguments[0])
 		c.emit(OpBegin)
+		c.emit(OpCreate, 1)
+		c.emit(OpSetAcc)
 		c.emitLoop(func() {
 			c.compile(node.Arguments[1])
 			c.emit(OpGroupBy)
 		})
-		c.emit(OpGetGroupBy)
+		c.emit(OpGetAcc)
+		c.emit(OpEnd)
+		return
+
+	case "sortBy":
+		c.compile(node.Arguments[0])
+		c.emit(OpBegin)
+		if len(node.Arguments) == 3 {
+			c.compile(node.Arguments[2])
+		} else {
+			c.emit(OpPush, c.addConstant("asc"))
+		}
+		c.emit(OpCreate, 2)
+		c.emit(OpSetAcc)
+		c.emitLoop(func() {
+			c.compile(node.Arguments[1])
+			c.emit(OpSortBy)
+		})
+		c.emit(OpSort)
 		c.emit(OpEnd)
 		return
 
@@ -861,8 +956,12 @@ func (c *compiler) BuiltinNode(node *ast.BuiltinNode) {
 		for _, arg := range node.Arguments {
 			c.compile(arg)
 		}
+
 		if f.Fast != nil {
 			c.emit(OpCallBuiltin1, id)
+		} else if f.Safe != nil {
+			c.emit(OpPush, c.addConstant(f.Safe))
+			c.emit(OpCallSafe, len(node.Arguments))
 		} else if f.Func != nil {
 			c.emitFunction(f, len(node.Arguments))
 		}
@@ -998,6 +1097,19 @@ func (c *compiler) derefInNeeded(node ast.Node) {
 	switch kind(node) {
 	case reflect.Ptr, reflect.Interface:
 		c.emit(OpDeref)
+	}
+}
+
+func (c *compiler) optimize() {
+	for i, op := range c.bytecode {
+		switch op {
+		case OpJumpIfTrue, OpJumpIfFalse, OpJumpIfNil, OpJumpIfNotNil:
+			target := i + c.arguments[i] + 1
+			for target < len(c.bytecode) && c.bytecode[target] == op {
+				target += c.arguments[target] + 1
+			}
+			c.arguments[i] = target - i - 1
+		}
 	}
 }
 

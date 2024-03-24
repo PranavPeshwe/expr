@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/antonmedv/expr/ast"
+	"github.com/expr-lang/expr/ast"
 )
 
 type Env struct {
@@ -103,10 +103,23 @@ func (Env) NotStringerStringerEqual(f fmt.Stringer, g fmt.Stringer) bool {
 
 type Embed struct {
 	EmbedEmbed
+	*EmbedPointerEmbed
 	EmbedString string
 }
 
 func (p Embed) EmbedMethod(_ int) string {
+	return ""
+}
+
+type EmbedPointerEmbed struct {
+	EmbedPointerEmbedInt int
+}
+
+func (p EmbedPointerEmbed) EmbedPointerEmbedMethod(_ int) string {
+	return ""
+}
+
+func (p *EmbedPointerEmbed) EmbedPointerEmbedPointerReceiverMethod(_ int) string {
 	return ""
 }
 
